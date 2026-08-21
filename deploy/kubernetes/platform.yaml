@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: Namespace
+metadata: {name: deploypilot, labels: {app.kubernetes.io/part-of: deploypilot}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: deploypilot-api, namespace: deploypilot}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: deploypilot-api, namespace: deploypilot}
+data:
+  ENVIRONMENT: production
+  AUTH_DISABLED: "false"
+  CORS_ORIGINS: https://deploypilot.example.com
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploypilot-api
+  namespace: deploypilot
+  labels: {app: deploypilot-api, app.kubernetes.io/part-of: deploypilot}
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app: deploypilot-api}}
+  template:
+    metadata: {labels: {app: deploypilot-api}}
+    spec:
+      serviceAccountName: deploypilot-api
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      topologySpreadConstraints:
+        - {maxSkew: 1, topologyKey: topology.kubernetes.io/zone, whenUnsatisfiable: ScheduleAnyway, labelSelector: {matchLabels: {app: deploypilot-api}}}
+      containers:
+        - name: api
+          image: us-central1-docker.pkg.dev/PROJECT/deploypilot/control-plane@sha256:REPLACE
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8000}]
+          envFrom: [{configMapRef: {name: deploypilot-api}}, {secretRef: {name: deploypilot-api}}]
+          readinessProbe: {httpGet: {path: /health/ready, port: http}, initialDelaySeconds: 5, periodSeconds: 5, timeoutSeconds: 2, failureThreshold: 3}
+          livenessProbe: {httpGet: {path: /health/live, port: http}, initialDelaySeconds: 15, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 3}
+          startupProbe: {httpGet: {path: /health/live, port: http}, periodSeconds: 3, failureThreshold: 20}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: deploypilot-api, namespace: deploypilot, labels: {app: deploypilot-api}}
+spec: {selector: {app: deploypilot-api}, ports: [{name: http, port: 80, targetPort: http}]}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: deploypilot-api, namespace: deploypilot}
+spec: {minAvailable: 2, selector: {matchLabels: {app: deploypilot-api}}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: deploypilot-api, namespace: deploypilot}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: deploypilot-api}
+  minReplicas: 3
+  maxReplicas: 10
+  behavior: {scaleDown: {stabilizationWindowSeconds: 300}}
+  metrics: [{type: Resource, resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}}]
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: deploypilot, namespace: deploypilot}
+spec: {hard: {requests.cpu: "4", requests.memory: 8Gi, limits.cpu: "8", limits.memory: 16Gi, pods: "30"}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: api-ingress, namespace: deploypilot}
+spec:
+  podSelector: {matchLabels: {app: deploypilot-api}}
+  policyTypes: [Ingress]
+  ingress: [{from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}], ports: [{protocol: TCP, port: 8000}]}]
