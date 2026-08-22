@@ -43,7 +43,7 @@ The API seeds realistic deployment and incident data in development mode. No Kub
 apps/web/                  Next.js operations dashboard
 services/control-plane/    FastAPI API, deployment orchestration, incident analysis
 deploy/kubernetes/         Namespaced app and observability manifests
-deploy/jenkins/            Release pipeline
+Jenkinsfile                Release pipeline
 infra/terraform/           Production GKE infrastructure
 observability/             Prometheus and Grafana provisioning
 scripts/                   Rollout and health-gate automation
@@ -55,11 +55,14 @@ Backend:
 
 ```bash
 cd services/control-plane
-python -m venv .venv
-.venv/Scripts/pip install -e ".[dev]"
+python3.12 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
 pytest
 uvicorn app.main:app --reload
 ```
+
+Python 3.12 is required — the pinned `psycopg[binary]` build has no wheels for 3.13+.
 
 Frontend:
 
@@ -85,8 +88,9 @@ See [docs/architecture.md](docs/architecture.md), [docs/runbook.md](docs/runbook
 ```bash
 docker compose config
 cd services/control-plane && pytest
-cd apps/web && npm run lint && npm run build
+cd apps/web && npm ci && npm run lint && npm run build
 terraform -chdir=infra/terraform fmt -check -recursive
+terraform -chdir=infra/terraform init -backend=false && terraform -chdir=infra/terraform validate
 ```
 
 ## License
